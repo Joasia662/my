@@ -1,13 +1,11 @@
-Sub GenerujHasla()
+Sub SendWorkbookEmails()
+
+    ' --- Find the AdminSetUp table ---
     Dim tbl As ListObject
     Dim ws As Worksheet
-    Dim i As Long
-    Dim colPassword As Long
-    
-    ' Find the worksheet containing the AdminSetUp table
     Dim found As Boolean
     found = False
-    
+
     For Each ws In ThisWorkbook.Worksheets
         For Each tbl In ws.ListObjects
             If tbl.Name = "AdminSetUp" Then
@@ -17,45 +15,119 @@ Sub GenerujHasla()
         Next tbl
         If found Then Exit For
     Next ws
-    
+
     If Not found Then
         MsgBox "Table 'AdminSetUp' not found!", vbExclamation
         Exit Sub
     End If
-    
-    ' Find the Password column index
-    colPassword = 0
+
+    ' --- Get column indices ---
+    Dim colMail As Long, colSheetName As Long, colPassword As Long
     Dim col As ListColumn
+    colMail = 0: colSheetName = 0: colPassword = 0
+
     For Each col In tbl.ListColumns
-        If col.Name = "Password" Then
-            colPassword = col.Index
-            Exit For
-        End If
+        Select Case col.Name
+            Case "Mail":        colMail = col.Index
+            Case "Sheet Name":  colSheetName = col.Index
+            Case "Password":    colPassword = col.Index
+        End Select
     Next col
-    
-    If colPassword = 0 Then
-        MsgBox "Column 'Password' not found!", vbExclamation
+
+    If colMail = 0 Or colSheetName = 0 Or colPassword = 0 Then
+        MsgBox "One or more required columns not found (Mail, Sheet Name, Password)!", vbExclamation
         Exit Sub
     End If
-    
-    ' Define character set for password generation
-    Dim znaki As String
-    znaki = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%"
-    
-    Randomize
-    
-    ' Generate a 10-character password for each row and write it to the Password column
+
+    ' --- Connect to Outlook ---
+    Dim outlookApp As Object
+    On Error Resume Next
+    Set outlookApp = GetObject(, "Outlook.Application")
+    On Error GoTo 0
+
+    If outlookApp Is Nothing Then
+        On Error Resume Next
+        Set outlookApp = CreateObject("Outlook.Application")
+        On Error GoTo 0
+    End If
+
+    If outlookApp Is Nothing Then
+        MsgBox "Could not connect to Outlook!", vbExclamation
+        Exit Sub
+    End If
+
+    ' --- Process each row ---
     Dim r As ListRow
-    Dim haslo As String
-    Dim j As Integer
-    
+    Dim mailAddress As String
+    Dim sheetName As String
+    Dim pwd As String
+    Dim targetSheet As Worksheet
+    Dim sheetExists As Boolean
+
     For Each r In tbl.ListRows
-        haslo = ""
-        For j = 1 To 10
-            haslo = haslo & Mid(znaki, Int(Rnd() * Len(znaki)) + 1, 1)
-        Next j
-        r.Range(colPassword).Value = haslo
+        mailAddress = Trim(CStr(r.Range(colMail).Value))
+        sheetName   = Trim(CStr(r.Range(colSheetName).Value))
+        pwd         = Trim(CStr(r.Range(colPassword).Value))
+
+        ' Check if the target sheet exists in this workbook
+        sheetExists = False
+        Set targetSheet = Nothing
+
+        For Each ws In ThisWorkbook.Worksheets
+            If ws.Name = sheetName Then
+                sheetExists = True
+                Set targetSheet = ws
+                Exit For
+            End If
+        Next ws
+
+        If Not sheetExists Then
+            ' Highlight the invalid Sheet Name cell red and notify user
+            r.Range(colSheetName).Interior.Color = RGB(255, 0, 0)
+            MsgBox "Sheet '" & sheetName & "' does not exist in this workbook." & vbNewLine & _
+                   "Row for '" & mailAddress & "' has been skipped.", vbExclamation
+
+        Else
+            ' Copy target sheet to a new temporary workbook
+            Dim tempFilePath As String
+            tempFilePath = Environ("TEMP") & "\" & sheetName & "_" & Format(Now, "yyyymmddhhmmss") & ".xlsx"
+
+            Application.DisplayAlerts = False
+            targetSheet.Copy ' Creates a new workbook containing only this sheet
+
+            Dim tempWb As Workbook
+            Set tempWb = ActiveWorkbook
+
+            ' Save the temporary workbook with password encryption
+            tempWb.SaveAs Filename:=tempFilePath, _
+                          FileFormat:=xlOpenXMLWorkbook, _
+                          Password:=pwd
+            tempWb.Close False
+            Application.DisplayAlerts = True
+
+            ' Email 1: Password notification email
+            Dim mailPwd As Object
+            Set mailPwd = outlookApp.CreateItem(0)
+            With mailPwd
+                .To      = mailAddress
+                .Subject = "Workbook Pwd"
+                .Body    = pwd
+                .Display
+            End With
+
+            ' Email 2: Encrypted workbook attachment email
+            Dim mailWb As Object
+            Set mailWb = outlookApp.CreateItem(0)
+            With mailWb
+                .To      = mailAddress
+                .Subject = "Workbook"
+                .Attachments.Add tempFilePath
+                .Display
+            End With
+
+        End If
     Next r
-    
-    MsgBox "Passwords generated successfully!", vbInformation
+
+    MsgBox "Done! Email drafts have been opened in Outlook.", vbInformation
+
 End Sub
