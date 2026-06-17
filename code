@@ -1,236 +1,61 @@
-Attribute VB_Name = "SheetAccessManager"
-Option Explicit
-
-' ================================================================
-'  HELPER: Find column index in baseConfiguration by header name
-' ================================================================
-Private Function GetColIdx(tbl As ListObject, colName As String) As Long
+Sub GenerujHasla()
+    Dim tbl As ListObject
+    Dim ws As Worksheet
+    Dim i As Long
+    Dim colPassword As Long
+    
+    ' Find the worksheet containing the AdminSetUp table
+    Dim found As Boolean
+    found = False
+    
+    For Each ws In ThisWorkbook.Worksheets
+        For Each tbl In ws.ListObjects
+            If tbl.Name = "AdminSetUp" Then
+                found = True
+                Exit For
+            End If
+        Next tbl
+        If found Then Exit For
+    Next ws
+    
+    If Not found Then
+        MsgBox "Table 'AdminSetUp' not found!", vbExclamation
+        Exit Sub
+    End If
+    
+    ' Find the Password column index
+    colPassword = 0
     Dim col As ListColumn
     For Each col In tbl.ListColumns
-        If col.Name = colName Then
-            GetColIdx = col.Index
-            Exit Function
+        If col.Name = "Password" Then
+            colPassword = col.Index
+            Exit For
         End If
     Next col
-    GetColIdx = 0
-    MsgBox "Column '" & colName & "' not found in table!", vbCritical, "Error"
-End Function
-
-' ================================================================
-'  HELPER: Generate unique 10-character password
-' ================================================================
-Private Function GeneratePassword() As String
-    ' Avoids ambiguous chars: 0/O, 1/l/I
-    Const CHARS As String = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%"
-    Dim result As String
-    Dim i As Integer
+    
+    If colPassword = 0 Then
+        MsgBox "Column 'Password' not found!", vbExclamation
+        Exit Sub
+    End If
+    
+    ' Define character set for password generation
+    Dim znaki As String
+    znaki = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%"
+    
     Randomize
-    For i = 1 To 10
-        result = result & Mid(CHARS, Int(Rnd() * Len(CHARS)) + 1, 1)
-    Next i
-    GeneratePassword = result
-End Function
-
-' ================================================================
-'  MACRO 1 — GeneratePasswords
-'  Assigns a unique 10-char password to each row, writes it to
-'  the Password column, then protects the matching sheet.
-' ================================================================
-Sub GeneratePasswords()
-    Dim ws       As Worksheet
-    Dim tbl      As ListObject
-    Dim tgtSheet As Worksheet
-    Dim i        As Long
-    Dim pwd      As String
-    Dim sName    As String
-    Dim okCnt    As Long
-    Dim errCnt   As Long
-
-    Set ws  = ThisWorkbook.Worksheets("settings")
-    Set tbl = ws.ListObjects("baseConfiguration")
-
-    Dim colPwd   As Long: colPwd   = GetColIdx(tbl, "Password")
-    Dim colSheet As Long: colSheet = GetColIdx(tbl, "Sheet Name")
-    If colPwd = 0 Or colSheet = 0 Then Exit Sub
-
-    okCnt  = 0
-    errCnt = 0
-
-    For i = 1 To tbl.ListRows.Count
-        pwd   = GeneratePassword()
-        sName = Trim(tbl.ListRows(i).Range(1, colSheet).Value)
-
-        ' Write password to table
-        tbl.ListRows(i).Range(1, colPwd).Value = pwd
-
-        ' Locate target sheet
-        Set tgtSheet = Nothing
-        On Error Resume Next
-        Set tgtSheet = ThisWorkbook.Worksheets(sName)
-        On Error GoTo 0
-
-        If Not tgtSheet Is Nothing Then
-            ' Remove existing protection first (ignore any error)
-            On Error Resume Next
-            tgtSheet.Unprotect
-            On Error GoTo 0
-            ' Apply new protection
-            tgtSheet.Protect Password:=pwd, _
-                DrawingObjects:=True, _
-                Contents:=True, _
-                Scenarios:=True, _
-                UserInterfaceOnly:=False
-            okCnt = okCnt + 1
-        Else
-            errCnt = errCnt + 1
-        End If
-    Next i
-
-    Dim msg As String
-    msg = "Passwords generated and sheets protected: " & okCnt
-    If errCnt > 0 Then msg = msg & Chr(10) & "Sheets not found: " & errCnt
-    MsgBox msg, vbInformation, "Generate Passwords"
-End Sub
-
-' ================================================================
-'  MACRO 2 — CheckPasswords
-'  Tries each password from the Password column against its sheet.
-'  Writes "OK" or "FAIL" to Check column + timestamp to Check Date.
-' ================================================================
-Sub CheckPasswords()
-    Dim ws       As Worksheet
-    Dim tbl      As ListObject
-    Dim tgtSheet As Worksheet
-    Dim i        As Long
-    Dim pwd      As String
-    Dim sName    As String
-    Dim result   As String
-    Dim checkTime As Date
-
-    Set ws  = ThisWorkbook.Worksheets("settings")
-    Set tbl = ws.ListObjects("baseConfiguration")
-
-    Dim colPwd   As Long: colPwd   = GetColIdx(tbl, "Password")
-    Dim colSheet As Long: colSheet = GetColIdx(tbl, "Sheet Name")
-    Dim colCheck As Long: colCheck = GetColIdx(tbl, "Check")
-    Dim colDate  As Long: colDate  = GetColIdx(tbl, "Check Date")
-    If colPwd = 0 Or colSheet = 0 Or colCheck = 0 Or colDate = 0 Then Exit Sub
-
-    checkTime = Now()
-
-    For i = 1 To tbl.ListRows.Count
-        pwd   = Trim(tbl.ListRows(i).Range(1, colPwd).Value)
-        sName = Trim(tbl.ListRows(i).Range(1, colSheet).Value)
-
-        Set tgtSheet = Nothing
-        On Error Resume Next
-        Set tgtSheet = ThisWorkbook.Worksheets(sName)
-        On Error GoTo 0
-
-        If tgtSheet Is Nothing Then
-            result = "Sheet not found"
-        ElseIf pwd = "" Then
-            result = "No password"
-        ElseIf Not tgtSheet.ProtectContents Then
-            result = "Not protected"
-        Else
-            ' Attempt unprotect — error = wrong password
-            On Error Resume Next
-            tgtSheet.Unprotect Password:=pwd
-            If Err.Number <> 0 Then
-                result = "FAIL"
-                Err.Clear
-            Else
-                result = "OK"
-                ' Re-protect immediately
-                tgtSheet.Protect Password:=pwd, _
-                    DrawingObjects:=True, _
-                    Contents:=True, _
-                    Scenarios:=True
-            End If
-            On Error GoTo 0
-        End If
-
-        ' Write results
-        tbl.ListRows(i).Range(1, colCheck).Value = result
-
-        Dim dateCell As Range
-        Set dateCell = tbl.ListRows(i).Range(1, colDate)
-        dateCell.Value         = checkTime
-        dateCell.NumberFormat  = "yyyy-mm-dd hh:mm:ss"
-    Next i
-
-    MsgBox "Check completed at " & Format(checkTime, "yyyy-mm-dd hh:mm:ss"), _
-           vbInformation, "Check Passwords"
-End Sub
-
-' ================================================================
-'  MACRO 3 — GenerateEmail
-'  Opens Outlook draft with all emails from Mail column as To:
-'  and attaches this workbook. Does NOT send.
-' ================================================================
-Sub GenerateEmail()
-    Dim ws      As Worksheet
-    Dim tbl     As ListObject
-    Dim i       As Long
-    Dim emails  As String
-    Dim oneAddr As String
-
-    Set ws  = ThisWorkbook.Worksheets("settings")
-    Set tbl = ws.ListObjects("baseConfiguration")
-
-    Dim colMail As Long: colMail = GetColIdx(tbl, "Mail")
-    If colMail = 0 Then Exit Sub
-
-    ' Collect all non-empty email addresses
-    For i = 1 To tbl.ListRows.Count
-        oneAddr = Trim(tbl.ListRows(i).Range(1, colMail).Value)
-        If oneAddr <> "" Then
-            If emails <> "" Then emails = emails & ";"
-            emails = emails & oneAddr
-        End If
-    Next i
-
-    If emails = "" Then
-        MsgBox "No email addresses found in the table!", vbExclamation, "Generate Email"
-        Exit Sub
-    End If
-
-    If ThisWorkbook.Path = "" Then
-        MsgBox "Please save the workbook first (so it can be attached).", _
-               vbExclamation, "Generate Email"
-        Exit Sub
-    End If
-
-    ' Connect to Outlook (reuse running instance if available)
-    Dim olApp  As Object
-    Dim olMail As Object
-
-    On Error Resume Next
-    Set olApp = GetObject(, "Outlook.Application")
-    On Error GoTo 0
-
-    If olApp Is Nothing Then
-        On Error Resume Next
-        Set olApp = CreateObject("Outlook.Application")
-        On Error GoTo 0
-    End If
-
-    If olApp Is Nothing Then
-        MsgBox "Cannot connect to Outlook. Please make sure it is installed.", _
-               vbCritical, "Generate Email"
-        Exit Sub
-    End If
-
-    Set olMail = olApp.CreateItem(0)   ' 0 = olMailItem
-
-    With olMail
-        .To      = emails
-        .Subject = "Sheet Access Report — " & Format(Now(), "yyyy-mm-dd")
-        .Body    = "Please find attached the Sheet Access Manager workbook." & vbCrLf & vbCrLf & _
-                   "Generated: " & Format(Now(), "yyyy-mm-dd hh:mm:ss") & vbCrLf & vbCrLf & _
-                   "Recipients:" & vbCrLf & Join(Split(emails, ";"), vbCrLf)
-        .Attachments.Add ThisWorkbook.FullName
-        .Display   ' <-- opens window, does NOT send
-    End With
+    
+    ' Generate a 10-character password for each row and write it to the Password column
+    Dim r As ListRow
+    Dim haslo As String
+    Dim j As Integer
+    
+    For Each r In tbl.ListRows
+        haslo = ""
+        For j = 1 To 10
+            haslo = haslo & Mid(znaki, Int(Rnd() * Len(znaki)) + 1, 1)
+        Next j
+        r.Range(colPassword).Value = haslo
+    Next r
+    
+    MsgBox "Passwords generated successfully!", vbInformation
 End Sub
